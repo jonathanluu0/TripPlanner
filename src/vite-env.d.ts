@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_ANON_KEY?: string;
   readonly VITE_RECEIPT_PARSER?: 'tesseract' | 'claude' | 'manual';
   readonly VITE_RECEIPT_API_URL?: string;
+  readonly VITE_RECEIPT_PREPROCESS?: 'on' | 'off';
 }
 
 interface ImportMeta {

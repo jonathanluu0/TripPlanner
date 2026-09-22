@@ -46,12 +46,12 @@ This guide expands §6 of DESIGN.md with detailed analysis of each backend optio
 
 ### Setup steps
 1. Create Supabase project → note API URL and anon key.
-2. Run `supabase/schema.sql` via the SQL editor.
+2. Apply the database: `supabase link` + `supabase db push` (or paste `supabase/migrations/*.sql` into the SQL Editor in order). See `supabase/README.md`.
 3. Deploy parse-receipt Edge Function: `supabase functions deploy parse-receipt`.
 4. Set secrets: `supabase secrets set ANTHROPIC_API_KEY=sk-...`
-5. Create Storage bucket: `supabase storage create-bucket receipts --public=false`.
+5. Storage bucket `receipts` is created by the `..._receipts_storage.sql` migration.
 6. Set `.env`: `VITE_BACKEND=supabase`, `VITE_SUPABASE_URL=...`, `VITE_SUPABASE_ANON_KEY=...`
-7. Create auth policy and RLS rules (included in schema.sql).
+7. Enable anonymous sign-ins (guest mode). RLS rules are included in the migrations.
 
 ### TripRepository interface
 ```ts
@@ -206,7 +206,7 @@ class FirebaseRepository implements TripRepository {
 ### Setup steps
 1. Set up Hono or Express.js project; add Lucia or Auth.js.
 2. Provision Postgres (Neon, Railway, Supabase Postgres-only, or self-hosted).
-3. Run schema.sql.
+3. Apply the SQL in `supabase/migrations/` (minus the Supabase-specific storage/realtime parts).
 4. Implement auth endpoints: `/login`, `/signup`, `/logout`.
 5. Implement trip endpoints: `/api/trips`, `/api/trips/:id/join`, etc.
 6. Set up WebSocket server and handle trip subscriptions.

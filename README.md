@@ -130,8 +130,10 @@ VITE_RECEIPT_API_URL=https://your-project.supabase.co/functions/v1/parse-receipt
 ├── docs/
 │   ├── DESIGN.md                   # Full spec (stack, screens, data model, features)
 │   └── BACKEND_OPTIONS.md          # Backend decision guide & setup
-├── supabase/
-│   └── schema.sql                  # Postgres schema (RLS, tables, functions)
+├── supabase/                       # Database (see supabase/README.md)
+│   ├── schemas/                    # Source of truth: one file per table / function
+│   ├── migrations/                 # Timestamped changes applied to Supabase
+│   └── tests/                      # pgTAP security tests
 ├── server/
 │   └── parse-receipt/
 │       ├── index.ts                # Deno Edge Function (Claude vision)
@@ -231,5 +233,5 @@ See **[server/parse-receipt/README.md](server/parse-receipt/README.md)** for Edg
 
 - [Full design spec](docs/DESIGN.md)
 - [Backend comparison](docs/BACKEND_OPTIONS.md)
-- [Supabase schema](supabase/schema.sql)
+- [Supabase database](supabase/README.md)
 - [Receipt parser deployment](server/parse-receipt/README.md)

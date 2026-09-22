@@ -1,0 +1,2 @@
+-- Sample data for LOCAL development only (`supabase db reset` runs this).
+-- Intentionally empty: trips are created in the app by signed-in guests.

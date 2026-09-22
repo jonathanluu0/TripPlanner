@@ -118,7 +118,7 @@ src/
     receipts/   ReceiptsPanel.tsx, ReceiptUpload.tsx, ReviewModal.tsx, ItemsTable.tsx,
                 SplitControls.tsx, BalancesCard.tsx, parsers/{index,tesseract,claude,heuristics}.ts
 docs/        DESIGN.md, BACKEND_OPTIONS.md
-supabase/    schema.sql (tables + RLS)
+supabase/    schemas/ (source of truth), migrations/, tests/ (pgTAP) — see supabase/README.md
 server/      parse-receipt/ (Claude vision function example)
 ```
 

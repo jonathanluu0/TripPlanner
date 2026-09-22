@@ -1,5 +1,6 @@
 import type { ReceiptParser } from './index';
 import { parseReceiptText } from './heuristics';
+import { isPreprocessingEnabled, preprocessReceiptImage } from '../preprocess';
 
 /**
  * Client-default OCR parser. `tesseract.js` is dynamically imported so it never
@@ -17,7 +18,8 @@ export const tesseractParser: ReceiptParser = {
       },
     });
     try {
-      const { data } = await worker.recognize(file);
+      const image = await prepareImage(file);
+      const { data } = await worker.recognize(image);
       onProgress?.(1);
       const parsed = parseReceiptText(data.text ?? '');
       return parsed;
@@ -26,3 +28,14 @@ export const tesseractParser: ReceiptParser = {
     }
   },
 };
+
+/** Cleans up the photo before OCR; falls back to the original file if cleanup fails. */
+async function prepareImage(file: File): Promise<File | HTMLCanvasElement> {
+  if (!isPreprocessingEnabled()) return file;
+  try {
+    return await preprocessReceiptImage(file);
+  } catch (err) {
+    console.warn('Receipt preprocessing failed; using the original image.', err);
+    return file;
+  }
+}

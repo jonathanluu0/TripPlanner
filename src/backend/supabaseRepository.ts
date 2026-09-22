@@ -2,10 +2,10 @@ import type { ID, Trip } from '../types';
 import type { TripRepository } from './repository';
 
 const NOT_CONFIGURED =
-  'Supabase backend is not configured yet. Set VITE_BACKEND=local or implement SupabaseRepository (see supabase/schema.sql).';
+  'Supabase backend is not configured yet. Set VITE_BACKEND=local or implement SupabaseRepository (see supabase/README.md).';
 
 /**
- * Stub for the recommended backend (docs/DESIGN.md §6, supabase/schema.sql).
+ * Stub for the recommended backend (docs/DESIGN.md §6, supabase/README.md).
  *
  * Implementation notes (TODO):
  *  - Client: `createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY)`
