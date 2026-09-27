@@ -1,250 +1,195 @@
-// Supabase Edge Function: Receipt parsing with Claude vision
-// Deploy: supabase functions deploy parse-receipt
-// Secrets: supabase secrets set ANTHROPIC_API_KEY=sk-...
+// Supabase Edge Function: read a receipt photo with a vision model.
+//
+// Deploy:  supabase functions deploy parse-receipt
+// Secrets: supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   (or OPENAI_API_KEY=sk-...)
+//
+// Provider is pluggable (see providers.ts): Claude Haiku 4.5 (~$0.004/receipt)
+// or GPT-4.1 mini (~$0.0015/receipt). Set RECEIPT_PROVIDER, or pass
+// {"provider":"openai"} in the request to compare them on the same photo.
+//
+// Only users signed in to this Supabase project can call it — the caller's
+// token is checked before any credit is spent, so a stranger who finds the URL
+// gets a 401.
 
-import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
+import { ProviderError, selectProvider } from "./providers.ts";
+
+const MAX_IMAGE_BYTES = 6 * 1024 * 1024; // ~4.5MB of base64
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey",
+};
+
+interface ParsedItem {
+  name: string;
+  basePrice: number;
+  quantity: number;
+  extras?: Array<{ label: string; amount: number }>;
+}
 
 interface ParsedReceipt {
   merchant: string;
   date?: string;
-  items: Array<{
-    name: string;
-    basePrice: number; // cents
-    quantity: number;
-  }>;
-  tax: number; // cents
-  tip: number; // cents
-  fees: Array<{
-    label: string;
-    amount: number; // cents
-  }>;
-  total: number; // cents
-  confidence: number; // 0..1
+  items: ParsedItem[];
+  tax: number;
+  tip: number;
+  fees: Array<{ label: string; amount: number }>;
+  total: number;
+  confidence: number;
 }
 
-interface RequestBody {
-  imageBase64?: string;
-  mediaType?: string;
-}
+const PROMPT = `Read this receipt and return ONLY a JSON object, no other text.
 
-// Helper: convert base64 image to Anthropic image format
-async function encodeImage(
-  imageBase64: string,
-  mediaType: string
-): Promise<{
-  type: "base64";
-  media_type: string;
-  data: string;
-}> {
-  return {
-    type: "base64",
-    media_type: mediaType || "image/jpeg",
-    data: imageBase64,
-  };
-}
-
-// Parse response from Claude to ensure it's valid JSON
-function validateAndCoerceResponse(raw: string): ParsedReceipt {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // If not valid JSON, try extracting JSON from text
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      parsed = JSON.parse(jsonMatch[0]);
-    } else {
-      throw new Error("Could not extract JSON from response");
-    }
-  }
-
-  // Validate and coerce structure
-  const obj = parsed as Record<string, unknown>;
-
-  const result: ParsedReceipt = {
-    merchant: String(obj.merchant || "Unknown"),
-    date: obj.date ? String(obj.date) : undefined,
-    items: Array.isArray(obj.items)
-      ? obj.items.map((item: unknown) => {
-          const i = item as Record<string, unknown>;
-          return {
-            name: String(i.name || "Item"),
-            basePrice: parseInt(String(i.basePrice || 0), 10),
-            quantity: parseInt(String(i.quantity || 1), 10),
-          };
-        })
-      : [],
-    tax: parseInt(String(obj.tax || 0), 10),
-    tip: parseInt(String(obj.tip || 0), 10),
-    fees: Array.isArray(obj.fees)
-      ? obj.fees.map((fee: unknown) => {
-          const f = fee as Record<string, unknown>;
-          return {
-            label: String(f.label || "Fee"),
-            amount: parseInt(String(f.amount || 0), 10),
-          };
-        })
-      : [],
-    total: parseInt(String(obj.total || 0), 10),
-    confidence:
-      typeof obj.confidence === "number" ? obj.confidence : 0.8,
-  };
-
-  return result;
-}
-
-serve(async (req: Request) => {
-  // CORS headers
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
-
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-
-  if (req.method !== "POST") {
-    return new Response(
-      JSON.stringify({ error: "Method not allowed" }),
-      {
-        status: 405,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
-  }
-
-  try {
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY not set");
-    }
-
-    const model = Deno.env.get("ANTHROPIC_MODEL") || "claude-opus-4-1-vision-20250714";
-
-    let imageBase64: string;
-    let mediaType: string;
-
-    // Handle both multipart and JSON request formats
-    const contentType = req.headers.get("content-type") || "";
-
-    if (contentType.includes("multipart/form-data")) {
-      // Parse multipart form
-      const formData = await req.formData();
-      const file = formData.get("image") as File;
-      if (!file) {
-        throw new Error("No image field in multipart request");
-      }
-
-      mediaType = file.type || "image/jpeg";
-      const arrayBuffer = await file.arrayBuffer();
-      imageBase64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-    } else {
-      // Parse JSON
-      const body = (await req.json()) as RequestBody;
-      imageBase64 = body.imageBase64 || "";
-      mediaType = body.mediaType || "image/jpeg";
-
-      if (!imageBase64) {
-        throw new Error("No imageBase64 in request body");
-      }
-    }
-
-    // Call Anthropic API with vision
-    const imagePayload = await encodeImage(imageBase64, mediaType);
-
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: 1024,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: imagePayload,
-              },
-              {
-                type: "text",
-                text: `Extract receipt data from this image and return a JSON object with NO ADDITIONAL TEXT.
-Strict schema: {
-  "merchant": "string (business name)",
-  "date": "string (ISO date YYYY-MM-DD or null)",
+{
+  "merchant": "business name",
+  "date": "YYYY-MM-DD or null",
   "items": [
-    {"name": "item name", "basePrice": number (cents, integer), "quantity": number (integer)}
+    {
+      "name": "item name as printed",
+      "basePrice": 0,
+      "quantity": 1,
+      "extras": [{ "label": "add-on or discount", "amount": 0 }]
+    }
   ],
-  "tax": number (cents, integer),
-  "tip": number (cents, integer),
-  "fees": [
-    {"label": "fee description", "amount": number (cents, integer)}
-  ],
-  "total": number (printed total in cents, integer),
-  "confidence": number (0.0 to 1.0, your confidence in accuracy)
+  "tax": 0,
+  "tip": 0,
+  "fees": [{ "label": "service fee / delivery / resort fee", "amount": 0 }],
+  "total": 0,
+  "confidence": 0.0
 }
 
-Guidelines:
-- ALL PRICES IN CENTS (multiply dollars by 100)
-- Items: extract line item name, unit price, and quantity
-- Tax: if not itemized, estimate or 0
-- Tip: line-item tip amount or 0
-- Fees: service charges, delivery, resort fees, etc.
-- Confidence: how sure you are (0.8+ for clear receipts)
-- Return ONLY valid JSON, no markdown, no extra text`,
-              },
-            ],
-          },
-        ],
-      }),
-    });
+Rules:
+- EVERY amount is an integer number of CENTS. $12.34 is 1234.
+- "total" is the total actually printed on the receipt (the amount charged),
+  not a sum you compute. If no total is printed, use 0.
+- Discounts, coupons and "you saved" lines belong in the "extras" of the item
+  they apply to, as NEGATIVE amounts. Never list them as separate items.
+- Add-ons that increase an item's price (extra shot, guacamole) are positive extras.
+- Ignore subtotal, change, cash/card/auth lines and loyalty points.
+- "confidence" is your own honest estimate (0–1) of how accurately you read it;
+  use a low value when the print is unclear or cut off.`;
 
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      throw new Error(`Anthropic API error: ${anthropicRes.status} ${errText}`);
-    }
+Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-    interface AnthropicMessage {
-      content: Array<{
-        type: string;
-        text?: string;
-      }>;
-    }
+  try {
+    await requireSignedInUser(req);
 
-    const anthropicData = (await anthropicRes.json()) as AnthropicMessage;
-    const textContent = anthropicData.content.find(
-      (c: { type: string; text?: string }) => c.type === "text"
-    );
-    if (!textContent || !textContent.text) {
-      throw new Error("No text response from Anthropic");
-    }
-
-    // Validate and coerce the response
-    const parsed = validateAndCoerceResponse(textContent.text);
-
-    return new Response(JSON.stringify(parsed), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-      status: 200,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(
-      JSON.stringify({ error: message }),
-      {
-        status: 400,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const { imageBase64, mediaType, provider: requested } = await readImage(req);
+    const provider = selectProvider(requested);
+    const raw = await provider.read({ imageBase64, mediaType, prompt: PROMPT });
+    const parsed = coerce(raw);
+    return json({ ...parsed, model: provider.model, provider: provider.name }, 200);
+  } catch (err) {
+    const status = err instanceof HttpError || err instanceof ProviderError ? err.status : 500;
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("parse-receipt failed:", message);
+    return json({ error: message }, status);
   }
 });
+
+class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+function requireEnv(name: string): string {
+  const value = Deno.env.get(name);
+  if (!value) throw new HttpError(500, `${name} is not set on this function`);
+  return value;
+}
+
+/**
+ * Only users signed in to this Supabase project may call the function —
+ * otherwise the URL alone would let anyone spend your Anthropic credit.
+ * Guests count: an anonymous sign-in is still a real user.
+ */
+async function requireSignedInUser(req: Request): Promise<void> {
+  const token = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+  if (!token) throw new HttpError(401, "Sign in to scan receipts");
+
+  const supabaseUrl = requireEnv("SUPABASE_URL");
+  const anonKey = requireEnv("SUPABASE_ANON_KEY");
+  const res = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: anonKey },
+  });
+  if (!res.ok) throw new HttpError(401, "Your session has expired — reload and try again");
+}
+
+async function readImage(req: Request): Promise<{ imageBase64: string; mediaType: string; provider?: string }> {
+  const contentType = req.headers.get("content-type") ?? "";
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = await req.formData();
+    const file = form.get("image");
+    if (!(file instanceof File)) throw new HttpError(400, "No image in the request");
+    return { imageBase64: await toBase64(await file.arrayBuffer()), mediaType: file.type || "image/jpeg" };
+  }
+
+  const body = await req.json() as { imageBase64?: string; mediaType?: string; provider?: string };
+  if (!body.imageBase64) throw new HttpError(400, "No imageBase64 in the request");
+  if (body.imageBase64.length > MAX_IMAGE_BYTES) throw new HttpError(413, "That photo is too large");
+  return { imageBase64: body.imageBase64, mediaType: body.mediaType || "image/jpeg", provider: body.provider };
+}
+
+/** Chunked so a large image doesn't blow the call stack. */
+async function toBase64(buffer: ArrayBuffer): Promise<string> {
+  if (buffer.byteLength > MAX_IMAGE_BYTES) throw new HttpError(413, "That photo is too large");
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return btoa(binary);
+}
+
+/** The model is asked for strict JSON; this makes sure we can trust what we got. */
+function coerce(raw: string): ParsedReceipt {
+  const jsonText = raw.trim().startsWith("{") ? raw : raw.match(/\{[\s\S]*\}/)?.[0];
+  if (!jsonText) throw new HttpError(502, "Could not read the receipt");
+
+  const obj = JSON.parse(jsonText) as Record<string, unknown>;
+  const cents = (value: unknown): number => {
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  return {
+    merchant: String(obj.merchant ?? ""),
+    date: obj.date ? String(obj.date) : undefined,
+    items: asArray(obj.items).map((raw) => {
+      const item = raw as Record<string, unknown>;
+      return {
+        name: String(item.name ?? "Item"),
+        basePrice: cents(item.basePrice),
+        quantity: Math.max(1, Math.round(Number(item.quantity) || 1)),
+        extras: asArray(item.extras).map((rawExtra) => {
+          const extra = rawExtra as Record<string, unknown>;
+          return { label: String(extra.label ?? "Extra"), amount: cents(extra.amount) };
+        }),
+      };
+    }),
+    tax: cents(obj.tax),
+    tip: cents(obj.tip),
+    fees: asArray(obj.fees).map((rawFee) => {
+      const fee = rawFee as Record<string, unknown>;
+      return { label: String(fee.label ?? "Fee"), amount: cents(fee.amount) };
+    }),
+    total: cents(obj.total),
+    confidence: typeof obj.confidence === "number" ? Math.min(1, Math.max(0, obj.confidence)) : 0.8,
+  };
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" },
+  });
+}

@@ -18,6 +18,7 @@ import {
 import {
   IconAlertTriangle,
   IconCamera,
+  IconSparkles,
   IconCheck,
   IconPencil,
   IconPhotoOff,
@@ -34,6 +35,7 @@ import { SplitControls } from './SplitControls';
 import { MoneyInput } from './MoneyInput';
 import { fileToDataUrl } from './imageUtils';
 import { storeReceiptImage, useReceiptImageUrl } from './useReceiptImage';
+import { claudeParser } from './parsers/claude';
 import { getParser } from './parsers';
 
 export interface ReviewModalProps {
@@ -57,6 +59,8 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
   const [zoomed, setZoomed] = useState(false);
   const imageUrl = useReceiptImageUrl(receipt);
   const [reparsing, setReparsing] = useState<number | null>(null);
+  // "Improve with AI" only appears when a Claude endpoint is configured.
+  const aiAvailable = Boolean(import.meta.env.VITE_RECEIPT_API_URL);
   const retakeInputRef = useRef<HTMLInputElement>(null);
 
   if (!receipt) return null;
@@ -100,6 +104,38 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
     }
   };
 
+  /**
+   * Re-reads the same photo with Claude (a few tenths of a cent). Kept as an
+   * explicit action rather than the default so scanning stays free unless the
+   * free reader actually got it wrong.
+   */
+  const improveWithAi = async () => {
+    if (!imageUrl) return;
+    setReparsing(0);
+    try {
+      const blob = await (await fetch(imageUrl)).blob();
+      const parsed = await claudeParser.parse(
+        new File([blob], 'receipt.jpg', { type: blob.type || 'image/jpeg' }),
+        (p) => setReparsing(Math.round(p * 100)),
+      );
+      updateReceipt(trip.id, receipt.id, {
+        ...fromParsedReceipt(parsed),
+        parser: 'claude',
+        status: 'needs_review',
+      });
+      notifications.show({ color: 'teal', message: 'Re-read with AI — check the numbers.' });
+    } catch (err) {
+      console.error('AI re-read failed:', err);
+      notifications.show({
+        color: 'red',
+        title: 'AI scan failed',
+        message: err instanceof Error ? err.message : 'Try again, or fill the details in yourself.',
+      });
+    } finally {
+      setReparsing(null);
+    }
+  };
+
   return (
     <Modal opened={opened} onClose={onClose} title={receipt.merchant || 'Receipt'} size="xl" centered>
       <Stack gap="md">
@@ -125,6 +161,18 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
                 >
                   Retake / re-upload
                 </Button>
+                {aiAvailable && receipt.parser !== 'claude' && (
+                  <Button
+                    size="xs"
+                    variant="light"
+                    color="grape"
+                    leftSection={<IconSparkles size={14} />}
+                    loading={reparsing !== null}
+                    onClick={() => void improveWithAi()}
+                  >
+                    Improve with AI
+                  </Button>
+                )}
               </Group>
             </Stack>
           </Alert>

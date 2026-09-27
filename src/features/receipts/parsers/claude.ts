@@ -1,5 +1,6 @@
 import type { ParsedFee, ParsedReceipt, ParsedReceiptItem } from '../../../types';
 import type { ReceiptParser } from './index';
+import { backendKind } from '../../../backend';
 
 /** Reads a File as a data URL and splits it into raw base64 + media type. */
 function readFileAsBase64(file: File): Promise<{ base64: string; mediaType: string }> {
@@ -39,6 +40,17 @@ function coerceParsedReceipt(raw: unknown): ParsedReceipt {
           name: typeof i.name === 'string' && i.name.trim() ? i.name : 'Item',
           basePrice: toInt(i.basePrice),
           quantity: Math.max(1, toInt(i.quantity, 1)),
+          // Add-ons are positive, discounts negative — the item's line total
+          // is (basePrice + extras) × quantity.
+          extras: Array.isArray(i.extras)
+            ? i.extras.map((rawExtra) => {
+                const extra = asRecord(rawExtra);
+                return {
+                  label: typeof extra.label === 'string' && extra.label.trim() ? extra.label : 'Extra',
+                  amount: toInt(extra.amount),
+                };
+              })
+            : undefined,
         };
       })
     : [];
@@ -61,9 +73,22 @@ function coerceParsedReceipt(raw: unknown): ParsedReceipt {
     tip: toInt(obj.tip),
     fees,
     total: toInt(obj.total),
-    totalSource: 'printed',
+    totalSource: toInt(obj.total) > 0 ? 'printed' : 'computed',
     confidence: typeof obj.confidence === 'number' ? Math.min(1, Math.max(0, obj.confidence)) : 0.8,
   };
+}
+
+/**
+ * The function only serves signed-in users of this project, so it needs the
+ * caller's Supabase token — otherwise anyone who found the URL could spend the
+ * project's Claude credit.
+ */
+async function authHeader(): Promise<Record<string, string>> {
+  if (backendKind !== 'supabase') return {};
+  const { getSupabase } = await import('../../../backend/supabase/client');
+  const { data } = await getSupabase().auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 /** POSTs the image to `VITE_RECEIPT_API_URL` (see server/parse-receipt) for Claude-vision extraction. */
@@ -79,13 +104,15 @@ export const claudeParser: ReceiptParser = {
 
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
       body: JSON.stringify({ imageBase64: base64, mediaType }),
     });
     onProgress?.(0.85);
 
     if (!res.ok) {
-      throw new Error(`Receipt parsing service responded with ${res.status}`);
+      const detail = await res.json().catch(() => null);
+      const message = detail && typeof detail.error === 'string' ? detail.error : `service responded with ${res.status}`;
+      throw new Error(`Receipt scanning failed: ${message}`);
     }
     const json = await res.json();
     onProgress?.(1);

@@ -1,166 +1,109 @@
-# Receipt Parser — Supabase Edge Function
+# parse-receipt — AI receipt reading (optional)
 
-Claude vision-based receipt parsing via Supabase Edge Functions (Deno).
+A Supabase Edge Function that reads a receipt photo with a vision model and
+returns structured JSON. Two providers ship with it (Claude and OpenAI); the
+prompt, JSON shape and validation are shared, so swapping models is a setting,
+not a rewrite — see `providers.ts`. The app works without it: uploads use the free in-browser
+reader, and this only runs when someone presses **Improve with AI** in the
+review window.
 
-## What it does
+**Cost per receipt** (~1,900 input + 400 output tokens):
 
-- Accepts an image (multipart or base64 JSON).
-- Calls Anthropic API with Claude vision model.
-- Returns structured JSON: merchant, date, items, tax, tip, fees, total, confidence.
-- All prices in cents (integer).
+| Provider | Model | ≈ per receipt | 30-receipt trip |
+|---|---|---|---|
+| `anthropic` | claude-haiku-4-5 | $0.004 | ~12¢ |
+| `openai` | gpt-4.1-mini | $0.0015 | ~5¢ |
 
-## Prerequisites
+Which reads *your* receipts better is an open question — compare them below.
+API credit is prepaid on both, so with auto-reload off you cannot be billed
+beyond what you add.
 
-- [Supabase CLI](https://github.com/supabase/cli)
-- [Anthropic API key](https://console.anthropic.com/)
-- Existing Supabase project
+**Who can call it:** only users signed in to your Supabase project (guests
+count). The function verifies the caller's token before spending credit, so a
+stranger who finds the URL gets a 401.
 
-## Deployment
+## Deploy
 
-### 1. Set up Anthropic secret
+1. **Get an Anthropic API key** at console.anthropic.com, and add a small
+   amount of credit ($5 goes a long way). Leave auto-reload off.
 
-```bash
-supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
-```
+2. **Set it as a secret** (never in `.env`, never in git):
 
-Optionally set a custom model (defaults to `claude-opus-4-1-vision-20250714`):
+   ```bash
+   npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+   # or OpenAI, or both if you want to compare them:
+   npx supabase secrets set OPENAI_API_KEY=sk-...
+   # which one to use by default (optional; defaults to whichever key exists)
+   npx supabase secrets set RECEIPT_PROVIDER=anthropic
+   # override the model (optional)
+   npx supabase secrets set ANTHROPIC_MODEL=claude-haiku-4-5
+   npx supabase secrets set OPENAI_MODEL=gpt-4.1-mini
+   ```
 
-```bash
-supabase secrets set ANTHROPIC_MODEL=claude-opus-4-1-vision-20250714
-```
+3. **Deploy the function:**
 
-### 2. Deploy the function
+   ```bash
+   npx supabase functions deploy parse-receipt
+   ```
 
-```bash
-supabase functions deploy parse-receipt
-```
+   No Docker needed for recent CLI versions. If yours insists on it, create the
+   function in the dashboard instead (Edge Functions → Deploy a new function)
+   and paste in `index.ts`.
 
-### 3. Test locally (optional)
+   `SUPABASE_URL` and `SUPABASE_ANON_KEY` are provided automatically; the
+   function uses them to check the caller is signed in.
 
-```bash
-supabase functions serve
-```
+4. **Point the app at it.** In `.env` and in Vercel's environment variables:
 
-Then POST to `http://localhost:54321/functions/v1/parse-receipt`:
+   ```
+   VITE_RECEIPT_API_URL=https://<your ref>.supabase.co/functions/v1/parse-receipt
+   ```
 
-```bash
-curl -X POST http://localhost:54321/functions/v1/parse-receipt \
-  -H "Content-Type: application/json" \
-  -d '{
-    "imageBase64": "<base64-encoded-image>",
-    "mediaType": "image/jpeg"
-  }'
-```
+   Restart `npm run dev` (or redeploy) and the **Improve with AI** button appears
+   in the receipt review window.
 
-## Request formats
+## Check it works
 
-### JSON (recommended for web clients)
+Upload a receipt, press **Improve with AI**, and confirm the numbers improve.
+Then watch your spend at console.anthropic.com → Usage. Logs are under
+Supabase → Edge Functions → parse-receipt → Logs.
 
-```json
-POST /functions/v1/parse-receipt
-Content-Type: application/json
+## Comparing the two on your own receipts
 
-{
-  "imageBase64": "iVBORw0KGgoAAAANSUhEUgAA...",
-  "mediaType": "image/jpeg"
-}
-```
+With both keys set, the same photo can be sent to either provider — the
+request takes an optional `provider` field. From the app's browser console:
 
-### Multipart form
+```js
+const { getSupabase } = await import('/src/backend/supabase/client.ts');
+const sb = getSupabase();
+const { data: { session } } = await sb.auth.getSession();
+const { data } = await sb.storage.from('receipts').createSignedUrl('<trip id>/<receipt id>.jpg', 600);
+const blob = await (await fetch(data.signedUrl)).blob();
+const imageBase64 = await new Promise((res) => {
+  const r = new FileReader();
+  r.onload = () => res(String(r.result).split(',')[1]);
+  r.readAsDataURL(blob);
+});
 
-```bash
-curl -X POST https://<project>.supabase.co/functions/v1/parse-receipt \
-  -H "Authorization: Bearer <anon_key>" \
-  -F "image=@receipt.jpg"
-```
-
-## Response
-
-```json
-{
-  "merchant": "Chipotle",
-  "date": "2025-09-20",
-  "items": [
-    { "name": "Chicken Bowl", "basePrice": 950, "quantity": 1 },
-    { "name": "Guacamole", "basePrice": 250, "quantity": 1 }
-  ],
-  "tax": 130,
-  "tip": 200,
-  "fees": [],
-  "total": 1530,
-  "confidence": 0.95
-}
-```
-
-## Error responses
-
-```json
-{
-  "error": "ANTHROPIC_API_KEY not set"
-}
-```
-
-```json
-{
-  "error": "Could not extract JSON from response"
-}
-```
-
-## Integration in the app
-
-Call this function from `src/features/receipts/parsers/claude.ts`:
-
-```ts
-// parsers/claude.ts
-import type { ParsedReceipt } from '../../types';
-
-export async function parseWithClaude(
-  file: File,
-  apiUrl: string
-): Promise<ParsedReceipt> {
-  const reader = new FileReader();
-  reader.readAsDataURL(file);
-
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-  });
-
-  const base64 = dataUrl.split(',')[1];
-  const mediaType = file.type || 'image/jpeg';
-
-  const res = await fetch(apiUrl, {
+for (const provider of ['anthropic', 'openai']) {
+  const res = await fetch(import.meta.env.VITE_RECEIPT_API_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ imageBase64: base64, mediaType }),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify({ imageBase64, mediaType: 'image/jpeg', provider }),
   });
-
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Receipt parsing failed');
-  }
-
-  return res.json();
+  const out = await res.json();
+  console.log(provider, out.model, 'total', out.total / 100, 'items', out.items.length, 'confidence', out.confidence);
 }
 ```
 
-## Environment variables (in `.env`)
+Compare each `total` against what the receipt actually says, on 5–10 of your
+own receipts. That beats any published benchmark for this decision.
 
-```
-VITE_RECEIPT_PARSER=claude
-VITE_RECEIPT_API_URL=https://<project>.supabase.co/functions/v1/parse-receipt
-```
+## Keeping the cost near zero
 
-## Cost estimate
-
-- Anthropic API: ~$0.01 USD per receipt with Claude vision.
-- For 100 receipts/month: ~$1.
-
-## Debugging
-
-If the function fails:
-
-1. Check logs: `supabase functions list` then `supabase functions fetch-logs parse-receipt`
-2. Ensure ANTHROPIC_API_KEY is set: `supabase secrets list`
-3. Test locally with `supabase functions serve`.
-4. Verify image format (JPEG, PNG, GIF, WebP supported).
+- Uploads stay on the free reader; AI is opt-in per receipt.
+- The photo is already shrunk to ~1600px before upload, which is most of the
+  token cost.
+- Spend is capped by your prepaid balance.
+- If you ever want it automatic, set `VITE_RECEIPT_PARSER=claude` — then every
+  upload uses Claude and falls back to the free reader if the call fails.
