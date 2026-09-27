@@ -15,6 +15,7 @@ import {
 } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { useDisclosure } from '@mantine/hooks';
+import { backendKind } from '../backend';
 import {
   IconBed,
   IconCalendar,
@@ -214,9 +215,10 @@ export function HomePage() {
     [tripsMap],
   );
 
-  // First run: seed a demo trip so the app isn't empty.
+  // First run: seed a demo trip so the app isn't empty. Only in local mode —
+  // with Supabase it would create a demo trip in the database for every guest.
   useEffect(() => {
-    if (trips.length === 0 && !demoSeeded) seedDemoTrip();
+    if (backendKind === 'local' && trips.length === 0 && !demoSeeded) seedDemoTrip();
   }, [trips.length, demoSeeded, seedDemoTrip]);
 
   return (

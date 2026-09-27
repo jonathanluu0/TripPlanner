@@ -54,6 +54,8 @@ export interface TripState {
   deleteTrip(tripId: ID): void;
   /** Insert or replace a whole trip (e.g. loaded from the repository). */
   upsertTrip(trip: Trip): void;
+  /** Replace the whole trip list with what the backend returned (Supabase startup). */
+  replaceAllTrips(trips: Trip[]): void;
   /** Adds `name` to the trip (or reuses a same-named member) and marks them as "me". */
   joinTripByCode(code: string, name: string): JoinResult | null;
   /** Mark an existing member as "me" on this device (claiming a placeholder). */
@@ -231,6 +233,16 @@ export const useTripStore = create<TripState>()(
 
         upsertTrip(trip) {
           set((s) => ({ trips: { ...s.trips, [trip.id]: trip } }));
+        },
+
+        replaceAllTrips(trips) {
+          set((s) => ({
+            trips: Object.fromEntries(trips.map((t) => [t.id, t])),
+            // Keep "who am I" for trips that still exist.
+            meByTrip: Object.fromEntries(
+              Object.entries(s.meByTrip).filter(([tripId]) => trips.some((t) => t.id === tripId)),
+            ),
+          }));
         },
 
         joinTripByCode(code, name) {

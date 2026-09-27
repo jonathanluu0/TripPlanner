@@ -16,7 +16,7 @@ import {
 import { notifications } from '@mantine/notifications';
 import { IconAlertCircle, IconUserPlus } from '@tabler/icons-react';
 import { useTripStore } from '../store/tripStore';
-import { repository } from '../backend';
+import { backendKind, repository } from '../backend';
 import { normalizeInviteCode } from '../lib/ids';
 import { formatDateRange } from '../lib/dates';
 import { MemberChip } from '../components/MemberChip';
@@ -32,6 +32,7 @@ export function JoinPage() {
   const navigate = useNavigate();
 
   const trip = useTripStore((s) => Object.values(s.trips).find((t) => t.inviteCode === code));
+  const addMember = useTripStore((s) => s.addMember);
   const meId = useTripStore((s) => (trip ? s.meByTrip[trip.id] : undefined));
   const upsertTrip = useTripStore((s) => s.upsertTrip);
   const joinTripByCode = useTripStore((s) => s.joinTripByCode);
@@ -69,8 +70,10 @@ export function JoinPage() {
           <Card maw={440} padding="xl">
             <Stack>
               <Alert color="red" icon={<IconAlertCircle />} title="Trip not found">
-                No trip matches code <b>{code || '—'}</b>. With the local backend, trips only exist on the
-                device that created them — connect a shared backend (see docs) to join from other devices.
+                No trip matches code <b>{code || '—'}</b>.{' '}
+                {backendKind === 'local'
+                  ? 'In local mode trips only exist on the device that created them — set VITE_BACKEND=supabase to join from other devices.'
+                  : 'Double-check the code with whoever invited you.'}
               </Alert>
               <Button component={Link} to="/" variant="default">
                 Back home
@@ -85,18 +88,41 @@ export function JoinPage() {
   const me = trip.members.find((m) => m.id === meId);
   const goToTrip = () => navigate(`/trip/${trip.id}`);
 
-  const claim = (member: Member) => {
+  /** Take a name on the trip; with a shared backend this also reserves it. */
+  const claim = async (member: Member) => {
     setMe(trip.id, member.id);
+    try {
+      await repository.claimMember?.(trip.id, member.id);
+    } catch (err) {
+      console.error('Could not claim that name:', err);
+      notifications.show({
+        color: 'orange',
+        title: 'That name is taken',
+        message: `Someone else is already using ${member.name} on this trip — pick another or add your own.`,
+      });
+      return;
+    }
     notifications.show({ color: 'teal', message: `Welcome, ${member.name}!` });
     goToTrip();
   };
 
-  const join = (e: FormEvent) => {
+  const join = async (e: FormEvent) => {
     e.preventDefault();
-    const result = joinTripByCode(code, name);
-    if (!result) return;
-    notifications.show({ color: 'teal', message: `You joined ${result.trip.name}` });
-    goToTrip();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    if (backendKind === 'local') {
+      const result = joinTripByCode(code, trimmed);
+      if (!result) return;
+      notifications.show({ color: 'teal', message: `You joined ${result.trip.name}` });
+      goToTrip();
+      return;
+    }
+
+    // Supabase: findTripByInviteCode already joined us; add our name and take it.
+    const existing = trip.members.find((m) => m.name.toLowerCase() === trimmed.toLowerCase());
+    const member = existing ?? addMember(trip.id, trimmed);
+    await claim(member);
   };
 
   const dates = formatDateRange(trip.startDate, trip.endDate);

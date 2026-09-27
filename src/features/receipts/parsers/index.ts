@@ -10,7 +10,7 @@ export interface ReceiptParser {
 }
 
 function emptyParsedReceipt(): ParsedReceipt {
-  return { merchant: '', items: [], tax: 0, tip: 0, fees: [], total: 0, confidence: 0 };
+  return { merchant: '', items: [], tax: 0, tip: 0, fees: [], total: 0, totalSource: 'computed', confidence: 0 };
 }
 
 /** No-op parser for "Enter manually" — the user fills in every field themselves. */

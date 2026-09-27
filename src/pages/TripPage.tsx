@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ActionIcon,
@@ -38,6 +38,7 @@ import { formatDateRange, inviteLink } from '../lib/dates';
 import { PeoplePanel } from '../features/people/PeoplePanel';
 import { LogisticsBoard } from '../features/logistics/LogisticsBoard';
 import { ReceiptsPanel } from '../features/receipts/ReceiptsPanel';
+import { repository } from '../backend';
 import type { Trip } from '../types';
 
 const TABS = ['people', 'logistics', 'expenses'] as const;
@@ -196,7 +197,30 @@ function TripHeader({ trip }: { trip: Trip }) {
 export function TripPage() {
   const { tripId } = useParams();
   const trip = useTrip(tripId);
+  const upsertTrip = useTripStore((s) => s.upsertTrip);
   const [params, setParams] = useSearchParams();
+
+  // Live updates: apply changes other people make to this trip, and re-check
+  // when the tab regains focus in case an update was missed while away.
+  useEffect(() => {
+    if (!tripId) return;
+    const stop = repository.subscribe?.(tripId, (merge) => {
+      const merged = merge(useTripStore.getState().trips[tripId]);
+      if (merged) upsertTrip(merged);
+      else repository.getTrip(tripId).then((fresh) => fresh && upsertTrip(fresh)).catch(() => undefined);
+    });
+    const refetch = () => {
+      repository
+        .getTrip(tripId)
+        .then((fresh) => fresh && upsertTrip(fresh))
+        .catch(() => undefined);
+    };
+    window.addEventListener('focus', refetch);
+    return () => {
+      stop?.();
+      window.removeEventListener('focus', refetch);
+    };
+  }, [tripId, upsertTrip]);
   const rawTab = params.get('tab');
   const tab: TabValue = isTab(rawTab) ? rawTab : 'people';
 

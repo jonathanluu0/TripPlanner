@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "comment": "Single-page app: every path must serve index.html, or opening an invite link like /join/K7Q2MX directly would 404.",
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

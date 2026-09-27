@@ -1,6 +1,6 @@
 import type { ID, Trip } from '../types';
 import { normalizeInviteCode } from '../lib/ids';
-import type { TripRepository } from './repository';
+import type { TripMerge, TripRepository } from './repository';
 
 const STORAGE_KEY = 'gtp-repo-trips';
 
@@ -47,11 +47,12 @@ export class LocalRepository implements TripRepository {
     return Object.values(readAll()).find((t) => t.inviteCode === target) ?? null;
   }
 
-  subscribe(tripId: ID, cb: (trip: Trip) => void): () => void {
+  subscribe(tripId: ID, onChange: (merge: TripMerge) => void): () => void {
     const handler = (e: StorageEvent) => {
       if (e.key !== STORAGE_KEY) return;
       const trip = readAll()[tripId];
-      if (trip) cb(trip);
+      // Another tab of this same browser wrote the whole trip; take it as-is.
+      if (trip) onChange(() => trip);
     };
     window.addEventListener('storage', handler);
     return () => window.removeEventListener('storage', handler);

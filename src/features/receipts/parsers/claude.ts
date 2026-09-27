@@ -61,6 +61,7 @@ function coerceParsedReceipt(raw: unknown): ParsedReceipt {
     tip: toInt(obj.tip),
     fees,
     total: toInt(obj.total),
+    totalSource: 'printed',
     confidence: typeof obj.confidence === 'number' ? Math.min(1, Math.max(0, obj.confidence)) : 0.8,
   };
 }

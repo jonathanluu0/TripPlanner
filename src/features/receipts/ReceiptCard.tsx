@@ -6,6 +6,7 @@ import { useTripStore } from '../../store/tripStore';
 import { formatCents } from '../../lib/money';
 import { MemberAvatar } from '../../components/MemberAvatar';
 import { SplitControls } from './SplitControls';
+import { useReceiptImageUrl } from './useReceiptImage';
 
 export interface ReceiptCardProps {
   trip: Trip;
@@ -26,6 +27,7 @@ const STATUS_COLOR: Record<Receipt['status'], string> = {
 
 /** One receipt in the expenses list: thumbnail, status, split controls — Feature 2. */
 export function ReceiptCard({ trip, receipt, onOpen }: ReceiptCardProps) {
+  const imageUrl = useReceiptImageUrl(receipt);
   const removeReceipt = useTripStore((s) => s.removeReceipt);
   const payer = trip.members.find((m) => m.id === receipt.paidById);
 
@@ -43,8 +45,8 @@ export function ReceiptCard({ trip, receipt, onOpen }: ReceiptCardProps) {
       <Stack gap="sm">
         <Group justify="space-between" align="flex-start" wrap="nowrap">
           <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }} onClick={onOpen}>
-            {receipt.imageDataUrl ? (
-              <Image src={receipt.imageDataUrl} w={56} h={56} radius="sm" fit="cover" />
+            {imageUrl ? (
+              <Image src={imageUrl} w={56} h={56} radius="sm" fit="cover" />
             ) : (
               <Group w={56} h={56} justify="center" align="center" style={{ border: '1px dashed var(--mantine-color-gray-4)', borderRadius: 6 }}>
                 <IconPhoto size={22} color="var(--mantine-color-gray-5)" />

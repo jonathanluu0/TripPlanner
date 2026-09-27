@@ -11,9 +11,7 @@ import { ModalsProvider } from '@mantine/modals';
 import { Notifications } from '@mantine/notifications';
 import { theme } from './theme';
 import App from './App';
-import { startRepositorySync } from './backend/sync';
-
-startRepositorySync();
+import { BackendGate } from './components/BackendGate';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -21,7 +19,9 @@ createRoot(document.getElementById('root')!).render(
       <ModalsProvider>
         <Notifications position="top-right" />
         <BrowserRouter>
-          <App />
+          <BackendGate>
+            <App />
+          </BackendGate>
         </BrowserRouter>
       </ModalsProvider>
     </MantineProvider>

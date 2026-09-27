@@ -23,5 +23,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Node test scripts (run with `npx tsx`), not part of the browser build.
+  "exclude": ["src/**/*.test.mts"]
 }

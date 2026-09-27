@@ -1,6 +1,6 @@
 import { LocalRepository } from './localRepository';
 import type { TripRepository } from './repository';
-import { SupabaseRepository } from './supabaseRepository';
+import { SupabaseRepository } from './supabase/supabaseRepository';
 
 export type { TripRepository } from './repository';
 

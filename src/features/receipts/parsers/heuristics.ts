@@ -13,13 +13,55 @@ const SKIP_RE = /\b(change|cash|card|visa|mastercard|amex|discover|debit|credit\
 const TAX_RE = /\b(sales\s*tax|tax|vat|gst|hst)\b/i;
 const TIP_RE = /\b(tip|gratuity)\b/i;
 const FEE_RE = /\b(service\s*fee|delivery\s*fee|delivery|surcharge|convenience\s*fee|booking\s*fee|resort\s*fee|cleaning\s*fee|processing\s*fee|fee)\b/i;
-const TOTAL_RE = /\b(total|amount\s*due|balance\s*due|balance|grand\s*total)\b/i;
+const TOTAL_RE = /\b(total|amount\s*due|balance\s*due|balance|grand\s*total|amount\s*charged)\b/i;
+/**
+ * Discounts and savings lines ("Cartwheel 15% off $3.62", "Saved $1.71 off").
+ * They print a price but aren't things you bought — counting them as items
+ * inflates the bill, and "total savings" isn't the total.
+ */
+const SAVINGS_RE = /\b(you\s*saved|saved|savings|discount|coupon|mfr\s*cpn|mfrcpn|promo)\b|\d+\s*%\s*off/i;
 
 const DATE_PATTERNS: RegExp[] = [
   /\b(\d{4}-\d{1,2}-\d{1,2})\b/,
   /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/,
   /\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{2,4})\b/i,
 ];
+
+/**
+ * The tax amount on a tax line.
+ *
+ * Receipts often print the rate and what it applied to before the amount:
+ *   "MO TAX 8.4750% on $151.37    12.83"
+ * Taking the rightmost number usually works, but if OCR dropped the amount we'd
+ * take $151.37 — the taxable subtotal — and report a wildly inflated tax. So on
+ * an "... on $X ..." line we only accept a number that comes after that base.
+ */
+function taxAmount(line: string, rightmost: number): number | null {
+  const base = /\bon\b\s*(\$?\s*\d[\d,]*(?:\.\d{1,2})?)/i.exec(line);
+  if (!base) return rightmost;
+
+  const after = line.slice(base.index + base[0].length);
+  const tokens = after.match(PRICE_TOKEN_RE)?.filter(looksLikeMoney) ?? [];
+  if (tokens.length === 0) return null; // the amount itself wasn't readable
+
+  const parsed = priceTokenToCents(tokens[tokens.length - 1]);
+  return parsed === null || parsed <= 0 ? null : parsed;
+}
+
+/**
+ * Which "total" line to trust when a receipt prints several (total, balance,
+ * amount due, card charged). Prefer the one that agrees with what we added up;
+ * otherwise take the last one printed, which is normally the real total.
+ */
+function pickTotal(candidates: number[], computed: number): number | null {
+  if (candidates.length === 0) return null;
+  const tolerance = Math.max(50, computed * 0.03);
+  const reconciling = candidates.filter((c) => Math.abs(c - computed) <= tolerance);
+  if (reconciling.length > 0) {
+    return reconciling.reduce((best, c) => (Math.abs(c - computed) < Math.abs(best - computed) ? c : best));
+  }
+  return candidates[candidates.length - 1];
+}
 
 /** True when a token looks like an actual currency amount, not a bare integer. */
 function looksLikeMoney(token: string): boolean {
@@ -166,7 +208,8 @@ export function parseReceiptText(text: string): ParsedReceipt {
   const fees: ParsedFee[] = [];
   let tax = 0;
   let tip = 0;
-  let bestTotal: number | null = null;
+
+  const totalCandidates: number[] = [];
 
   for (const line of lines) {
     const priced = extractPrice(line);
@@ -175,9 +218,20 @@ export function parseReceiptText(text: string): ParsedReceipt {
 
     if (SUBTOTAL_RE.test(line)) continue; // explicitly ignored as an item
     if (SKIP_RE.test(line)) continue; // change/cash/card/visa/etc
+    if (SAVINGS_RE.test(line)) {
+      // A discount belongs to the item printed just above it, as a negative
+      // extra: "Cartwheel 15% off $3.62" under "LEAN CUISINE $2.89".
+      // Counting it as its own item would inflate the bill instead.
+      const item = items[items.length - 1];
+      if (item && cents > 0) {
+        item.extras = [...(item.extras ?? []), { label: cleanLabel(rest) || 'Discount', amount: -cents }];
+      }
+      continue;
+    }
 
     if (TAX_RE.test(line)) {
-      tax += cents;
+      const amount = taxAmount(line, cents);
+      if (amount !== null) tax += amount;
       continue;
     }
     if (TIP_RE.test(line)) {
@@ -189,7 +243,7 @@ export function parseReceiptText(text: string): ParsedReceipt {
       continue;
     }
     if (TOTAL_RE.test(line)) {
-      if (bestTotal === null || cents > bestTotal) bestTotal = cents;
+      totalCandidates.push(cents);
       continue;
     }
 
@@ -199,10 +253,18 @@ export function parseReceiptText(text: string): ParsedReceipt {
     items.push({ name: label, basePrice: unitPriceCents ?? cents, quantity });
   }
 
-  const itemsSum = items.reduce((sum, it) => sum + it.basePrice * it.quantity, 0);
+  const itemsSum = items.reduce((sum, it) => {
+    const extras = (it.extras ?? []).reduce((acc, e) => acc + e.amount, 0);
+    return sum + (it.basePrice + extras) * it.quantity;
+  }, 0);
   const feesSum = fees.reduce((sum, f) => sum + f.amount, 0);
   const computed = itemsSum + tax + tip + feesSum;
+  const bestTotal = pickTotal(totalCandidates, computed);
   const total = bestTotal ?? computed;
+
+  // A tax bigger than the bill itself means we misread a line; drop it rather
+  // than show a nonsense number.
+  if (bestTotal !== null && tax > bestTotal) tax = 0;
 
   // Confidence: how closely the parsed pieces reconcile with the printed total.
   let confidence: number;
@@ -226,6 +288,7 @@ export function parseReceiptText(text: string): ParsedReceipt {
     tip,
     fees,
     total,
+    totalSource: bestTotal === null ? 'computed' : 'printed',
     confidence,
     rawText: text,
   };

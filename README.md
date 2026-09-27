@@ -229,6 +229,43 @@ See **[server/parse-receipt/README.md](server/parse-receipt/README.md)** for Edg
 
 (Add contribution guidelines here)
 
+## Deploying the MVP (Supabase + Vercel)
+
+Guest mode: every visitor gets an anonymous Supabase account, so friends join with
+an invite code without signing up. Google sign-in can be added later.
+
+**1. Supabase**
+
+1. Create a project at [supabase.com](https://supabase.com) (free tier is fine).
+2. Authentication → Sign In / Providers → enable **Allow anonymous sign-ins**.
+3. Apply the database: `npx supabase link --project-ref <ref>` then `npx supabase db push`
+   (or paste `supabase/migrations/*.sql` into the SQL Editor in order). See [supabase/README.md](supabase/README.md).
+4. Project Settings → API Keys → copy the **Project URL** and **publishable key**.
+
+**2. Run it locally against Supabase**
+
+```
+VITE_BACKEND=supabase
+VITE_SUPABASE_URL=https://<ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_...      # or the legacy anon key
+```
+
+`npm run dev`, create a trip, then open the invite link in a private window to test joining.
+
+**3. Vercel**
+
+1. [vercel.com](https://vercel.com) → Add New → Project → import this repo (Vite is detected automatically).
+2. Add the same three environment variables.
+3. Deploy, then add the deployed URL in Supabase under Authentication → URL Configuration.
+
+`vercel.json` rewrites every path to `index.html` so invite links like `/join/K7Q2MX` work.
+
+**Guest-mode limits**
+
+- A guest identity lives in one browser: clearing site data or switching devices means
+  joining with the code again and re-claiming your name.
+- Anyone with the invite code can join the trip — that's the intended trade-off for an MVP.
+
 ## Links
 
 - [Full design spec](docs/DESIGN.md)

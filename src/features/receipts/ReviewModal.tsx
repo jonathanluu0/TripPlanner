@@ -33,6 +33,7 @@ import { ItemsTable } from './ItemsTable';
 import { SplitControls } from './SplitControls';
 import { MoneyInput } from './MoneyInput';
 import { fileToDataUrl } from './imageUtils';
+import { storeReceiptImage, useReceiptImageUrl } from './useReceiptImage';
 import { getParser } from './parsers';
 
 export interface ReviewModalProps {
@@ -54,6 +55,7 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
     () => receipt?.status === 'confirmed' ? false : !receipt?.imageDataUrl,
   );
   const [zoomed, setZoomed] = useState(false);
+  const imageUrl = useReceiptImageUrl(receipt);
   const [reparsing, setReparsing] = useState<number | null>(null);
   const retakeInputRef = useRef<HTMLInputElement>(null);
 
@@ -73,6 +75,9 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
     try {
       const dataUrl = await fileToDataUrl(file);
       updateReceipt(trip.id, receipt.id, { imageDataUrl: dataUrl, status: 'parsing' });
+      void storeReceiptImage(trip.id, receipt.id, file).then(
+        (imagePath) => imagePath && updateReceipt(trip.id, receipt.id, { imagePath }),
+      );
       const parser = getParser();
       const parsed = await parser.parse(file, (p) => setReparsing(Math.round(p * 100)));
       updateReceipt(trip.id, receipt.id, {
@@ -149,10 +154,10 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
         <Grid gutter="lg">
           <Grid.Col span={{ base: 12, md: 5 }}>
             <Stack gap="xs">
-              {receipt.imageDataUrl ? (
+              {imageUrl ? (
                 <div style={{ maxHeight: zoomed ? 640 : 420, overflow: zoomed ? 'auto' : 'hidden' }}>
                   <Image
-                    src={receipt.imageDataUrl}
+                    src={imageUrl}
                     radius="md"
                     fit={zoomed ? 'contain' : 'contain'}
                     w={zoomed ? 'auto' : '100%'}
@@ -172,7 +177,7 @@ export function ReviewModal({ trip, receiptId, opened, onClose }: ReviewModalPro
                   </Text>
                 </Stack>
               )}
-              {receipt.imageDataUrl && (
+              {imageUrl && (
                 <Text size="xs" c="dimmed" ta="center">
                   Click photo to {zoomed ? 'shrink' : 'zoom'}
                 </Text>

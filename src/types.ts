@@ -80,7 +80,10 @@ export interface Receipt {
   id: ID;
   merchant: string;
   date?: string;
+  /** Photo shown right after upload (local mode, or before it reaches Storage). */
   imageDataUrl?: string;
+  /** Photo in Supabase Storage: `<trip id>/<receipt id>.jpg`. */
+  imagePath?: string;
   items: ReceiptItem[];
   tax: Cents;
   tip: Cents;
@@ -117,6 +120,8 @@ export interface ParsedReceipt {
   tip: Cents;
   fees: ParsedFee[];
   total: Cents;
+  /** 'printed' = read off a total line; 'computed' = added up from the items. */
+  totalSource: 'printed' | 'computed';
   confidence: number; // 0..1
   rawText?: string; // OCR text, useful for debugging
 }

@@ -7,6 +7,7 @@ import { useTripStore } from '../../store/tripStore';
 import { fromParsedReceipt } from '../../lib/receipts';
 import { fileToDataUrl } from './imageUtils';
 import { getParser } from './parsers';
+import { storeReceiptImage } from './useReceiptImage';
 
 export interface ReceiptUploadProps {
   tripId: string;
@@ -27,6 +28,11 @@ export function ReceiptUpload({ tripId, opened, onClose, onUploaded }: ReceiptUp
     setProgress(0);
     const dataUrl = await fileToDataUrl(file);
     const receipt = addReceipt(tripId, { status: 'parsing', imageDataUrl: dataUrl });
+
+    // Share the photo with the rest of the group (no-op in local mode).
+    void storeReceiptImage(tripId, receipt.id, file).then(
+      (imagePath) => imagePath && updateReceipt(tripId, receipt.id, { imagePath }),
+    );
 
     const parser = getParser();
     try {
